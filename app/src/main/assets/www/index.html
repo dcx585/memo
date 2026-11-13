@@ -379,12 +379,20 @@
   function dump(){ return JSON.stringify(notes,null,2) }
 
   // ——— 导出 ———
+  function ymd(){
+    var d=new Date(), p=function(x){return String(x).padStart(2,'0')};
+    return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+  }
   function exportAll(){
-    var name='memo-'+new Date().toISOString().slice(0,10)+'.json';
+    var name='memo-'+ymd()+'.json';
     var data=dump();
     if(bridge&&bridge.saveFile){
-      var ok=bridge.saveFile(name,data);
-      toast(ok?'已导出到「下载」目录':'导出失败，试试复制');
+      var path=bridge.saveFile(name,data);
+      if(path){ toast('已导出：'+path); return; }
+      // 直写下载目录失败 → 交给系统保存框，由用户选位置
+      if(bridge.pickSave&&bridge.pickSave(name,data)){ toast('请选择保存位置'); return; }
+      toast('导出失败，改用复制');
+      copyToClipboard(data);
       return;
     }
     try{
@@ -393,6 +401,12 @@
       a.href=URL.createObjectURL(blob); a.download=name;
       document.body.appendChild(a); a.click();
       setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove() },1500);
+      if(/;\s*wv\)/.test(navigator.userAgent)){
+        // 旧版壳没有桥，网页下载在 WebView 里不会落盘
+        toast('当前 App 版本不支持直接下载，已改为复制 JSON');
+        copyToClipboard(data);
+        return;
+      }
       toast('已导出 '+name);
     }catch(e){ copyToClipboard(data) }
   }
