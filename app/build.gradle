@@ -4,6 +4,11 @@ plugins {
 
 def ksFile = rootProject.file("release.jks")
 
+def envCode = System.getenv("APP_VERSION_CODE")
+def envName = System.getenv("APP_VERSION_NAME")
+def verCode = (envCode != null && envCode.trim().isInteger()) ? envCode.trim().toInteger() : 1
+def verName = (envName != null && envName.trim().length() > 0) ? envName.trim() : "1.1"
+
 android {
     namespace 'app.dcx.memo'
     compileSdk 34
@@ -13,8 +18,8 @@ android {
         minSdk 24
         targetSdk 34
         // CI 注入 APP_VERSION_CODE / APP_VERSION_NAME；本地构建用兜底值
-        versionCode (System.getenv("APP_VERSION_CODE") ?: "1").toInteger()
-        versionName (System.getenv("APP_VERSION_NAME") ?: "1.1")
+        versionCode verCode
+        versionName verName
     }
 
     signingConfigs {
