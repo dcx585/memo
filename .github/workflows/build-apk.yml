@@ -23,11 +23,44 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Prepare signing keystore
+        env:
+          KS_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.RELEASE_KEYSTORE_PASS }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::error::Secret RELEASE_KEYSTORE_BASE64 为空，无法固定签名"
+            exit 1
+          fi
+          echo "$KS_B64" | base64 -d > release.jks
+          if [ ! -s release.jks ]; then
+            echo "::error::keystore 解码后为 0 字节"
+            exit 1
+          fi
+          HEAD=$(od -An -tx1 -N1 release.jks | tr -d ' \n')
+          echo "keystore first byte: $HEAD"
+          if [ "$HEAD" != "30" ] && [ "$HEAD" != "fe" ]; then
+            echo "::error::不是合法的 PKCS12/JKS 文件（首字节 $HEAD）"
+            exit 1
+          fi
+          if [ -z "$KS_PASS" ]; then
+            echo "::error::Secret RELEASE_KEYSTORE_PASS 为空"
+            exit 1
+          fi
+
       - name: Build
         env:
           APP_VERSION_NAME: 1.${{ github.run_number }}
           APP_VERSION_CODE: ${{ github.run_number }}
+          RELEASE_KEYSTORE_PASS: ${{ secrets.RELEASE_KEYSTORE_PASS }}
+          RELEASE_KEY_PASS: ${{ secrets.RELEASE_KEY_PASS }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
         run: gradle assembleRelease --no-daemon
+
+      - name: Verify signature is stable
+        run: |
+          APKSIGNER=$(ls $ANDROID_HOME/build-tools/*/apksigner | tail -1)
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/*.apk | head -5
 
       - name: Rename APK
         run: |
@@ -39,6 +72,23 @@ jobs:
         with:
           tag_name: v1.${{ github.run_number }}
           files: out/memo-v1.${{ github.run_number }}.apk
+
+      - name: Clean previous latest assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REL_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/latest" \
+            | python3 -c "import json,sys;print(json.load(sys.stdin).get('id',''))")
+          if [ -n "$REL_ID" ]; then
+            curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/$REL_ID/assets" \
+              | python3 -c "import json,sys;[print(a['id']) for a in json.load(sys.stdin)]" \
+              | while read -r id; do
+                  curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                    "https://api.github.com/repos/${{ github.repository }}/releases/assets/$id"
+                done
+          fi
 
       - name: Release latest
         uses: softprops/action-gh-release@v2
