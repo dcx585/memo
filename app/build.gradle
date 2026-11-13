@@ -1,0 +1,43 @@
+plugins {
+    alias(libs.plugins.android.application)
+}
+
+android {
+    namespace 'app.dcx.memo'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "app.dcx.memo"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.1"
+    }
+
+    signingConfigs {
+        release {
+            def ksFile = rootProject.file("release.jks")
+            if (ksFile.exists()) {
+                storeFile ksFile
+                storePassword System.getenv("RELEASE_KEYSTORE_PASS") ?: "memo123456"
+                keyAlias System.getenv("RELEASE_KEY_ALIAS") ?: "memokey"
+                keyPassword System.getenv("RELEASE_KEY_PASS") ?: "memo123456"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+}

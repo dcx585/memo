@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>便签 · Memo</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#171a21; --card2:#1d2129; --line:#262b36;
+    --tx:#e8eaf0; --dim:#8b93a5; --acc:#5b8cff; --danger:#e05561;
+    --pin:#f5b342;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{font-family:system-ui,-apple-system,"PingFang SC","Noto Sans SC",sans-serif;
+    background:var(--bg);color:var(--tx);min-height:100vh}
+  .wrap{max-width:560px;margin:0 auto;padding:16px 14px calc(96px + env(safe-area-inset-bottom))}
+  header{display:flex;align-items:center;justify-content:space-between;padding:6px 2px 14px}
+  header h1{font-size:19px;font-weight:700}
+  header .count{font-size:12px;color:var(--dim)}
+  /* 输入区 */
+  .composer{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:12px}
+  .composer textarea{width:100%;background:transparent;border:0;outline:0;resize:none;
+    color:var(--tx);font-size:15px;line-height:1.5;min-height:44px;font-family:inherit}
+  .composer textarea::placeholder{color:var(--dim)}
+  .crow{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .crow input{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:8px;
+    padding:6px 10px;color:var(--tx);font-size:13px;outline:0;min-width:0}
+  .crow input::placeholder{color:var(--dim)}
+  .btn{border:0;border-radius:8px;padding:8px 16px;font-size:14px;font-weight:600;cursor:pointer}
+  .btn.primary{background:var(--acc);color:#fff}
+  .btn.ghost{background:var(--card2);color:var(--dim);border:1px solid var(--line)}
+  /* 搜索 */
+  .search{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:12px}
+  .search input{width:100%;background:transparent;border:0;outline:0;padding:10px 12px;
+    color:var(--tx);font-size:14px}
+  .search input::placeholder{color:var(--dim)}
+  /* 列表 */
+  .tag-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .tag-chip{font-size:12px;color:var(--dim);background:var(--card);border:1px solid var(--line);
+    border-radius:999px;padding:4px 11px;cursor:pointer}
+  .tag-chip.on{color:#fff;background:var(--acc);border-color:var(--acc)}
+  .note{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:12px 14px;margin-bottom:10px}
+  .note.pinned{border-color:rgba(245,179,66,.45)}
+  .note .txt{font-size:15px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+  .note .meta{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+  .note .time{font-size:11.5px;color:var(--dim)}
+  .note .ntag{font-size:11px;color:var(--acc);background:rgba(91,140,255,.12);
+    padding:2px 8px;border-radius:999px}
+  .note .acts{margin-left:auto;display:flex;gap:2px}
+  .icon-btn{background:transparent;border:0;color:var(--dim);font-size:16px;cursor:pointer;
+    padding:4px 6px;border-radius:6px;line-height:1}
+  .icon-btn:active{background:var(--card2)}
+  .icon-btn.del:hover{color:var(--danger)}
+  .icon-btn.pin.on{color:var(--pin)}
+  .empty{text-align:center;color:var(--dim);padding:48px 0;font-size:14px}
+  .empty .big{font-size:40px;margin-bottom:10px;opacity:.5}
+  /* 编辑弹层 */
+  .mask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;
+    align-items:flex-end;justify-content:center;z-index:9}
+  .mask.show{display:flex}
+  .sheet{background:var(--card);width:100%;max-width:560px;border-radius:16px 16px 0 0;
+    padding:16px;padding-bottom:calc(20px + env(safe-area-inset-bottom))}
+  .sheet h3{font-size:15px;margin-bottom:10px}
+  .sheet textarea{width:100%;background:var(--card2);border:1px solid var(--line);
+    border-radius:10px;padding:10px;color:var(--tx);font-size:15px;line-height:1.5;
+    min-height:120px;outline:0;resize:vertical;font-family:inherit}
+  .sheet input{width:100%;background:var(--card2);border:1px solid var(--line);
+    border-radius:10px;padding:10px 12px;color:var(--tx);font-size:14px;outline:0;
+    margin-top:10px}
+  .sheet .row{display:flex;gap:8px;margin-top:12px}
+  .sheet .row .btn{flex:1}
+  .toast{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom));
+    transform:translateX(-50%);background:#2a2f3a;color:#fff;font-size:13px;
+    padding:8px 18px;border-radius:999px;opacity:0;transition:opacity .25s;
+    pointer-events:none;z-index:99}
+  .toast.show{opacity:.95}
+  /* 底部工具条 */
+  .toolbar{position:fixed;left:0;right:0;bottom:0;background:var(--card);
+    border-top:1px solid var(--line);display:flex;justify-content:space-around;
+    padding:8px 0 calc(8px + env(safe-area-inset-bottom));z-index:5}
+  .toolbar button{background:transparent;border:0;color:var(--dim);font-size:11px;
+    display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;padding:4px 10px}
+  .toolbar button .ico{font-size:19px}
+  .toolbar button:active{color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>便签</h1>
+    <span class="count" id="count"></span>
+  </header>
+
+  <div class="composer">
+    <textarea id="txt" placeholder="记点什么…（Ctrl/⌘+Enter 快速保存）"></textarea>
+    <div class="crow">
+      <input id="ntag" placeholder="标签（可选）">
+      <button class="btn primary" id="add">保存</button>
+    </div>
+  </div>
+
+  <div class="search"><input id="q" placeholder="🔍 搜索内容或标签"></div>
+  <div class="tag-row" id="tags"></div>
+  <div id="list"></div>
+</div>
+
+<div class="mask" id="mask">
+  <div class="sheet">
+    <h3>编辑便签</h3>
+    <textarea id="etxt"></textarea>
+    <input id="entag" placeholder="标签">
+    <div class="row">
+      <button class="btn ghost" id="ecancel">取消</button>
+      <button class="btn primary" id="esave">保存</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<div class="toolbar">
+  <button id="t-pin"><span class="ico">📌</span>筛选置顶</button>
+  <button id="t-export"><span class="ico">📤</span>导出</button>
+  <button id="t-import"><span class="ico">📥</span>导入</button>
+  <button id="t-clear"><span class="ico">🗑️</span>清空</button>
+</div>
+<input type="file" id="file" accept=".json" hidden>
+
+<script>
+(function(){
+  'use strict';
+  var KEY='memo.notes.v1';
+  var notes=[], filterTag=null, onlyPin=false, editingId=null;
+  var $=function(s){return document.querySelector(s)};
+  var listEl=$('#list'), toastT;
+
+  function load(){ try{ notes=JSON.parse(localStorage.getItem(KEY)||'[]') }catch(e){ notes=[] } }
+  function save(){ localStorage.setItem(KEY, JSON.stringify(notes)) }
+  function esc(s){ return s.replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]}) }
+  function toast(m){ var t=$('#toast'); t.textContent=m; t.classList.add('show');
+    clearTimeout(toastT); toastT=setTimeout(function(){t.classList.remove('show')},1600) }
+  function fmt(ts){ var d=new Date(ts), n=new Date();
+    var sameDay=d.toDateString()===n.toDateString();
+    var p=function(x){return String(x).padStart(2,'0')};
+    return sameDay ? '今天 '+p(d.getHours())+':'+p(d.getMinutes())
+      : (d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()) }
+
+  function render(){
+    var q=$('#q').value.trim().toLowerCase();
+    var show=notes.filter(function(n){
+      if(onlyPin&&!n.pin) return false;
+      if(filterTag&&n.tag!==filterTag) return false;
+      if(q&&!(n.txt.toLowerCase().includes(q)||(n.tag||'').toLowerCase().includes(q))) return false;
+      return true;
+    });
+    show.sort(function(a,b){ return (b.pin-a.pin)||(b.ts-a.ts) });
+    listEl.innerHTML='';
+    if(!show.length){
+      listEl.innerHTML='<div class="empty"><div class="big">🗒️</div>'+
+        (notes.length?'没有匹配的便签':'还没有便签，写第一条吧')+'</div>'; }
+    show.forEach(function(n){
+      var el=document.createElement('div');
+      el.className='note'+(n.pin?' pinned':'');
+      var tagHtml=n.tag?'<span class="ntag">'+esc(n.tag)+'</span>':'';
+      el.innerHTML='<div class="txt"></div><div class="meta">'+
+        '<span class="time">'+fmt(n.ts)+'</span>'+tagHtml+
+        '<span class="acts">'+
+        '<button class="icon-btn pin'+(n.pin?' on':'')+'" data-a="pin" title="置顶">📌</button>'+
+        '<button class="icon-btn" data-a="edit" title="编辑">✏️</button>'+
+        '<button class="icon-btn del" data-a="del" title="删除">🗑️</button></span></div>';
+      el.querySelector('.txt').textContent=n.txt;
+      el.querySelector('[data-a=pin]').onclick=function(){ n.pin=!n.pin; save(); render(); };
+      el.querySelector('[data-a=edit]').onclick=function(){ openEdit(n.id) };
+      el.querySelector('[data-a=del]').onclick=function(){
+        notes=notes.filter(function(x){return x.id!==n.id}); save(); render(); toast('已删除'); };
+      listEl.appendChild(el);
+    });
+    $('#count').textContent=notes.length?notes.length+' 条':'';
+    // 标签 chips
+    var tagCount={};
+    notes.forEach(function(n){ if(n.tag) tagCount[n.tag]=(tagCount[n.tag]||0)+1 });
+    var tr=$('#tags'); tr.innerHTML='';
+    Object.keys(tagCount).sort().forEach(function(t){
+      var c=document.createElement('span');
+      c.className='tag-chip'+(filterTag===t?' on':'');
+      c.textContent=t+' ('+tagCount[t]+')';
+      c.onclick=function(){ filterTag=(filterTag===t?null:t); render(); };
+      tr.appendChild(c);
+    });
+  }
+
+  function add(){
+    var txt=$('#txt').value.trim();
+    if(!txt){ toast('内容不能为空'); return }
+    notes.unshift({ id:Date.now()+''+Math.floor(Math.random()*1e4),
+      txt:txt, tag:$('#ntag').value.trim(), ts:Date.now(), pin:false });
+    $('#txt').value=''; $('#ntag').value='';
+    save(); render(); toast('已保存');
+  }
+
+  function openEdit(id){
+    var n=notes.find(function(x){return x.id===id}); if(!n) return;
+    editingId=id; $('#etxt').value=n.txt; $('#entag').value=n.tag||'';
+    $('#mask').classList.add('show'); $('#etxt').focus();
+  }
+  $('#ecancel').onclick=function(){ $('#mask').classList.remove('show') };
+  $('#esave').onclick=function(){
+    var n=notes.find(function(x){return x.id===editingId}); if(!n) return;
+    var t=$('#etxt').value.trim();
+    if(!t){ toast('内容不能为空'); return }
+    n.txt=t; n.tag=$('#entag').value.trim(); save();
+    $('#mask').classList.remove('show'); render(); toast('已更新');
+  };
+  $('#mask').addEventListener('click',function(e){ if(e.target===this) this.classList.remove('show') });
+
+  $('#add').onclick=add;
+  $('#txt').addEventListener('keydown',function(e){
+    if((e.ctrlKey||e.metaKey)&&e.key==='Enter') add(); });
+  $('#q').addEventListener('input',render);
+
+  $('#t-pin').onclick=function(){ onlyPin=!onlyPin;
+    toast(onlyPin?'只看置顶':'显示全部'); render() };
+  $('#t-export').onclick=function(){
+    var blob=new Blob([JSON.stringify(notes,null,2)],{type:'application/json'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='memo-'+new Date().toISOString().slice(0,10)+'.json'; a.click();
+    URL.revokeObjectURL(a.href);
+  };
+  $('#t-import').onclick=function(){ $('#file').click() };
+  $('#file').addEventListener('change',function(e){
+    var f=e.target.files[0]; if(!f) return;
+    var r=new FileReader();
+    r.onload=function(){
+      try{
+        var arr=JSON.parse(r.result);
+        if(!Array.isArray(arr)) throw 0;
+        arr.forEach(function(n){
+          if(typeof n.txt==='string'&&n.txt.trim())
+            notes.push({ id:n.id||Date.now()+''+Math.floor(Math.random()*1e4),
+              txt:n.txt.trim(), tag:n.tag||'', ts:n.ts||Date.now(), pin:!!n.pin });
+        });
+        save(); render(); toast('已导入 '+arr.length+' 条');
+      }catch(err){ toast('文件格式不对') }
+    };
+    r.readAsText(f); e.target.value='';
+  });
+  $('#t-clear').onclick=function(){
+    if(!notes.length){ toast('本来就是空的'); return }
+    if(confirm('确定清空全部 '+notes.length+' 条便签？此操作不可恢复。')){
+      notes=[]; save(); render(); toast('已清空');
+    }
+  };
+
+  load();
+  // 首次使用给一条看得出来的虚拟示例，用户自己删
+  if(!notes.length){
+    notes.push({ id:'demo', txt:'示例：虚拟数据 —— 用 textarea 记事、标签分类、📌 置顶、右上角搜索。这条可以直接删掉。',
+      tag:'示例', ts:Date.now(), pin:true });
+    save();
+  }
+  render();
+})();
+</script>
+</body>
+</html>
