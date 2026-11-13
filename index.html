@@ -314,6 +314,7 @@
     </div>
     <div class="row">
       <button id="impPaste">粘贴 JSON</button>
+      <button id="impOrphan">找回未挂接文件</button>
     </div>
     <div class="row">
       <button id="impOptCancel" style="flex:1">取消</button>
@@ -393,6 +394,7 @@
   var KEY='memo.notes.v1';
   var notes=[], filterTag=null, onlyPin=false, editingId=null, tt;
   var pendingFiles=[];
+  var busy=0, wantSave=false;
   var filterCat=null;
   var $=function(s){return document.querySelector(s)};
   var listEl=$('#list');
@@ -622,6 +624,11 @@
   }
 
   function add(){
+    if(busy>0){
+      wantSave=true;
+      toast('附件还在复制，完成后再点一次或自动保存');
+      return;
+    }
     var v=$('#txt').value.trim();
     if(!v && !pendingFiles.length){ toast('写点什么，或加个附件'); return }
     notes.unshift({ id:Date.now()+''+Math.floor(Math.random()*1e4),
@@ -633,6 +640,22 @@
   }
 
   // ——— 附件 ———
+  function setBusy(delta){
+    busy=Math.max(0,busy+delta);
+    var box=$('#pending');
+    var ind=document.getElementById('busyChip');
+    if(busy>0){
+      if(!ind){
+        ind=document.createElement('span');
+        ind.id='busyChip'; ind.className='pchip';
+        ind.style.opacity='.75';
+        ind.textContent='正在复制附件…';
+        box.appendChild(ind);
+      }
+    } else if(ind){ ind.remove(); }
+    if(busy===0&&wantSave){ wantSave=false; add(); }
+  }
+
   function renderPending(){
     var box=$('#pending'); box.innerHTML='';
     pendingFiles.forEach(function(f,i){
@@ -660,11 +683,14 @@
   $('#pickFolderBtn').onclick=function(){
     $('#attachMask').classList.remove('show');
     if(!bridge.pickFolder){ toast('当前版本不支持文件夹'); return }
-    if(!bridge.pickFolder()) toast('无法打开文件夹选择');
+    if(!bridge.pickFolder()){ toast('无法打开文件夹选择'); return }
+    setBusy(1);
+    setTimeout(function(){ if(busy>0) setBusy(-1) }, 90000);
   };
 
   // 壳递归复制完文件夹后回调
   window.__folderResult=function(list){
+    setBusy(-1);
     if(!list||!list.length){ toast('文件夹里没有可导入的文件'); return }
     list.forEach(function(f){
       pendingFiles.push({name:f.name,stored:f.stored,size:f.size});
@@ -677,9 +703,11 @@
     var list=e.target.files; if(!list||!list.length) return;
     var arr=[].slice.call(list);
     e.target.value='';
-    var done=0;
+    var done=0, total=arr.length;
+    setBusy(1);
+    function tick(){ done++; if(done>=total) setBusy(-1); }
     arr.forEach(function(file){
-      if(file.size>30*1024*1024){ toast(file.name+' 超过 30MB，跳过'); done++; return }
+      if(file.size>30*1024*1024){ toast(file.name+' 超过 30MB，跳过'); tick(); return }
       var r=new FileReader();
       r.onload=function(){
         var s=String(r.result), comma=s.indexOf(',');
@@ -689,9 +717,9 @@
           pendingFiles.push({name:file.name,stored:stored,size:file.size});
           renderPending();
         } else toast('存入失败：'+file.name);
-        done++;
+        tick();
       };
-      r.onerror=function(){ toast('读取失败：'+file.name); done++ };
+      r.onerror=function(){ toast('读取失败：'+file.name); tick() };
       r.readAsDataURL(file);
     });
   });
@@ -946,6 +974,26 @@
     if(bridge&&bridge.pickBackup){ bridge.pickBackup(); return }
     $('#file').click();
   };
+  $('#impOrphan').onclick=function(){
+    $('#impOptMask').classList.remove('show');
+    if(!bridge||!bridge.listAttachments){ toast('需要 App 版本'); return }
+    var all=[];
+    try{ all=JSON.parse(bridge.listAttachments()||'[]') }catch(e){ all=[] }
+    var used={};
+    notes.forEach(function(n){ (n.files||[]).forEach(function(f){ if(f.stored) used[f.stored]=1 }) });
+    var orphans=all.filter(function(a){ return !used[a.stored] });
+    if(!orphans.length){ toast('没有未挂接的文件'); return }
+    askConfirm('找回 '+orphans.length+' 个文件？',
+      '这些附件已经在 App 里，但没有挂在任何便签上。会新建一条便签把它们收进来。',
+      '收容',function(){
+        notes.unshift({ id:Date.now()+''+Math.floor(Math.random()*1e4),
+          txt:'（这些附件之前没挂上便签，已自动收容，可改标题）',
+          tag:'', cat:'', ts:Date.now(), pin:true,
+          files:orphans.map(function(a){ return {name:a.name,stored:a.stored,size:a.size} }) });
+        save(); render(); toast('已收容 '+orphans.length+' 个文件');
+      });
+  };
+
   $('#impPaste').onclick=function(){
     $('#impOptMask').classList.remove('show');
     $('#pasteText').value=''; $('#pasteMask').classList.add('show');

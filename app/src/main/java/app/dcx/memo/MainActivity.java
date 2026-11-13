@@ -435,6 +435,30 @@ public class MainActivity extends Activity {
             }
         }
 
+        /** 列出私有目录里所有附件（含未挂接的孤儿文件）。 */
+        @JavascriptInterface
+        public String listAttachments() {
+            try {
+                JSONArray arr = new JSONArray();
+                File[] files = attestDir().listFiles();
+                if (files == null) return "[]";
+                java.util.Arrays.sort(files);
+                for (File f : files) {
+                    String name = f.getName();
+                    int us = name.indexOf('_');
+                    if (us > 0 && us < name.length() - 1) name = name.substring(us + 1);
+                    JSONObject o = new JSONObject();
+                    o.put("stored", f.getName());
+                    o.put("name", name);
+                    o.put("size", f.length());
+                    arr.put(o);
+                }
+                return arr.toString();
+            } catch (Exception e) {
+                return "[]";
+            }
+        }
+
         @JavascriptInterface
         public boolean fileExists(String storedName) {
             try {
