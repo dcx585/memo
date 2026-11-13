@@ -25,6 +25,7 @@ public class MainActivity extends Activity {
 
     private static final int REQ_FILE = 1001;
     private static final int REQ_CREATE = 1002;
+    private static final int REQ_TREE = 1003;
     private WebView web;
     private ValueCallback<Uri[]> fileCallback;
     private String pendingContent;
@@ -47,11 +48,12 @@ public class MainActivity extends Activity {
                                              FileChooserParams params) {
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
                 fileCallback = cb;
-                Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 i.addCategory(Intent.CATEGORY_OPENABLE);
                 i.setType("*/*");
+                i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
                 try {
-                    startActivityForResult(Intent.createChooser(i, "选择 JSON 文件"), REQ_FILE);
+                    startActivityForResult(Intent.createChooser(i, "选择文件（可多选）"), REQ_FILE);
                     return true;
                 } catch (Exception e) {
                     fileCallback = null;
@@ -78,8 +80,14 @@ public class MainActivity extends Activity {
         if (requestCode == REQ_FILE) {
             Uri[] result = null;
             if (resultCode == RESULT_OK && data != null) {
-                Uri uri = data.getData();
-                if (uri != null) result = new Uri[]{uri};
+                if (data.getClipData() != null) {
+                    int n = data.getClipData().getItemCount();
+                    result = new Uri[n];
+                    for (int k = 0; k < n; k++)
+                        result[k] = data.getClipData().getItemAt(k).getUri();
+                } else if (data.getData() != null) {
+                    result = new Uri[]{data.getData()};
+                }
             }
             if (fileCallback != null) {
                 fileCallback.onReceiveValue(result);
@@ -106,7 +114,74 @@ public class MainActivity extends Activity {
             pendingContent = null;
             return;
         }
+        if (requestCode == REQ_TREE) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                final Uri tree = data.getData();
+                new Thread(new Runnable() {
+                    public void run() { importTree(tree); }
+                }).start();
+            }
+            return;
+        }
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    /** 把选中文件夹里的文件全部复制进私有目录，然后回传 JSON 给网页。 */
+    private void importTree(Uri treeUri) {
+        try {
+            androidx.documentfile.provider.DocumentFile root =
+                    androidx.documentfile.provider.DocumentFile.fromTreeUri(this, treeUri);
+            if (root == null) { toast("读取文件夹失败"); return; }
+            File dir = new File(getFilesDir(), "attachments");
+            if (!dir.exists() && !dir.mkdirs()) { toast("创建目录失败"); return; }
+            org.json.JSONArray out = new org.json.JSONArray();
+            final int[] budget = {40};
+            final long[] bytesLeft = {30L * 1024 * 1024};
+            walk(root, dir, out, budget, bytesLeft, 0);
+            final String json = out.toString();
+            runOnUiThread(new Runnable() {
+                public void run() {
+                    web.evaluateJavascript(
+                        "window.__folderResult&&window.__folderResult(" + json + ")", null);
+                }
+            });
+        } catch (Exception e) {
+            toast("导入失败：" + e.getMessage());
+        }
+    }
+
+    private void walk(androidx.documentfile.provider.DocumentFile node, File dstDir,
+                      org.json.JSONArray out, int[] budget, long[] bytesLeft, int depth) {
+        if (depth > 4 || budget[0] <= 0 || node == null) return;
+        for (androidx.documentfile.provider.DocumentFile f : node.listFiles()) {
+            if (budget[0] <= 0) return;
+            if (f.isDirectory()) { walk(f, dstDir, out, budget, bytesLeft, depth + 1); continue; }
+            String name = f.getName() == null ? "file" : f.getName();
+            String safe = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+            String stored = System.currentTimeMillis() + "_" + safe;
+            try {
+                java.io.InputStream in = getContentResolver().openInputStream(f.getUri());
+                if (in == null) continue;
+                File target = new File(dstDir, stored);
+                FileOutputStream os = new FileOutputStream(target);
+                byte[] buf = new byte[8192];
+                long written = 0;
+                int r;
+                while ((r = in.read(buf)) > 0) {
+                    if (written + r > bytesLeft[0]) { os.close(); in.close();
+                        target.delete(); return; }
+                    os.write(buf, 0, r); written += r;
+                }
+                os.close(); in.close();
+                bytesLeft[0] -= written;
+                budget[0]--;
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("name", name);
+                o.put("stored", stored);
+                o.put("size", written);
+                out.put(o);
+            } catch (Exception ignored) { }
+        }
     }
 
     @Override
@@ -253,6 +328,21 @@ public class MainActivity extends Activity {
                 File f = new File(new File(getFilesDir(), "attachments"), storedName);
                 return f.exists() && f.delete();
             } catch (Exception e) {
+                return false;
+            }
+        }
+
+        /** 选整个文件夹：递归复制里面的文件，结果通过 window.__folderResult 回传。 */
+        @JavascriptInterface
+        public boolean pickFolder() {
+            try {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                startActivityForResult(i, REQ_TREE);
+                return true;
+            } catch (Exception e) {
+                toast("无法选择文件夹：" + e.getMessage());
                 return false;
             }
         }

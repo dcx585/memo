@@ -266,6 +266,20 @@
 <input type="file" id="file" accept=".json,application/json" hidden>
 <input type="file" id="attFile" hidden multiple>
 
+<!-- 选附件方式 -->
+<div class="mask" id="attachMask">
+  <div class="sheet">
+    <h3>添加附件</h3>
+    <div class="row">
+      <button id="pickFiles">选文件（可多选）</button>
+      <button class="primary" id="pickFolderBtn">选整个文件夹</button>
+    </div>
+    <div class="row">
+      <button id="attachCancel" style="flex:1">取消</button>
+    </div>
+  </div>
+</div>
+
 <!-- 粘贴导入 -->
 <div class="mask" id="pasteMask">
   <div class="sheet">
@@ -462,7 +476,28 @@
 
   $('#attach').onclick=function(){
     if(!bridge){ toast('附件功能需要 App 版本'); return }
+    $('#attachMask').classList.add('show');
+  };
+  $('#attachCancel').onclick=function(){ $('#attachMask').classList.remove('show') };
+  $('#attachMask').addEventListener('click',function(e){ if(e.target===this) this.classList.remove('show') });
+  $('#pickFiles').onclick=function(){
+    $('#attachMask').classList.remove('show');
     $('#attFile').click();
+  };
+  $('#pickFolderBtn').onclick=function(){
+    $('#attachMask').classList.remove('show');
+    if(!bridge.pickFolder){ toast('当前版本不支持文件夹'); return }
+    if(!bridge.pickFolder()) toast('无法打开文件夹选择');
+  };
+
+  // 壳递归复制完文件夹后回调
+  window.__folderResult=function(list){
+    if(!list||!list.length){ toast('文件夹里没有可导入的文件'); return }
+    list.forEach(function(f){
+      pendingFiles.push({name:f.name,stored:f.stored,size:f.size});
+    });
+    renderPending();
+    toast('已加入 '+list.length+' 个文件');
   };
 
   $('#attFile').addEventListener('change',function(e){
