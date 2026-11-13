@@ -121,6 +121,27 @@ public class MainActivity extends Activity {
         });
     }
 
+    private static String guessMime(String name) {
+        String n = name.toLowerCase();
+        if (n.endsWith(".pdf")) return "application/pdf";
+        if (n.endsWith(".png")) return "image/png";
+        if (n.endsWith(".jpg") || n.endsWith(".jpeg")) return "image/jpeg";
+        if (n.endsWith(".gif")) return "image/gif";
+        if (n.endsWith(".webp")) return "image/webp";
+        if (n.endsWith(".txt") || n.endsWith(".md")) return "text/plain";
+        if (n.endsWith(".json")) return "application/json";
+        if (n.endsWith(".zip")) return "application/zip";
+        if (n.endsWith(".doc")) return "application/msword";
+        if (n.endsWith(".docx"))
+            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        if (n.endsWith(".xls")) return "application/vnd.ms-excel";
+        if (n.endsWith(".xlsx"))
+            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        if (n.endsWith(".mp4")) return "video/mp4";
+        if (n.endsWith(".mp3")) return "audio/mpeg";
+        return "*/*";
+    }
+
     /** 供网页调用的桥。 */
     class Bridge {
         /** 尝试直接写入「下载」目录；返回落盘全路径，失败返回空串。 */
@@ -173,6 +194,65 @@ public class MainActivity extends Activity {
                 return true;
             } catch (Exception e) {
                 pendingContent = null;
+                return false;
+            }
+        }
+
+        /** 存附件：base64 内容写入应用私有目录，返回存储名（失败返回空串）。 */
+        @JavascriptInterface
+        public String saveAttachment(String fileName, String base64) {
+            try {
+                File dir = new File(getFilesDir(), "attachments");
+                if (!dir.exists() && !dir.mkdirs()) return "";
+                String safe = fileName == null ? "file"
+                        : fileName.replaceAll("[\\\\/:*?\"<>|]", "_");
+                String stored = System.currentTimeMillis() + "_" + safe;
+                File f = new File(dir, stored);
+                FileOutputStream fos = new FileOutputStream(f);
+                fos.write(android.util.Base64.decode(base64, android.util.Base64.DEFAULT));
+                fos.close();
+                return stored;
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        /** 打开附件：交给系统选择能处理它的应用。 */
+        @JavascriptInterface
+        public boolean openAttachment(String storedName) {
+            try {
+                File f = new File(new File(getFilesDir(), "attachments"), storedName);
+                if (!f.exists()) { toast("附件已不存在"); return false; }
+                Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                        MainActivity.this, "app.dcx.memo.fileprovider", f);
+                String mime = guessMime(f.getName());
+                Intent i = new Intent(Intent.ACTION_VIEW);
+                i.setDataAndType(uri, mime);
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_ACTIVITY_NEW_TASK);
+                try {
+                    startActivity(Intent.createChooser(i, "打开附件"));
+                } catch (Exception noApp) {
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType(mime);
+                    send.putExtra(Intent.EXTRA_STREAM, uri);
+                    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(send, "分享附件"));
+                }
+                return true;
+            } catch (Exception e) {
+                toast("打不开：" + e.getMessage());
+                return false;
+            }
+        }
+
+        /** 删除附件文件。 */
+        @JavascriptInterface
+        public boolean deleteAttachment(String storedName) {
+            try {
+                File f = new File(new File(getFilesDir(), "attachments"), storedName);
+                return f.exists() && f.delete();
+            } catch (Exception e) {
                 return false;
             }
         }

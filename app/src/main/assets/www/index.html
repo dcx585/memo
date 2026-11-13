@@ -61,7 +61,26 @@
     color:var(--ink);font:inherit;line-height:1.6;min-height:52px;
   }
   .composer textarea::placeholder{color:var(--muted)}
+  /* 待附加文件 */
+  .pending{display:flex;gap:7px;flex-wrap:wrap;padding-top:9px}
+  .pchip{display:inline-flex;align-items:center;gap:6px;background:var(--accent-soft);
+    border:1px solid color-mix(in srgb,var(--accent) 22%,transparent);
+    color:var(--accent);border-radius:999px;padding:4px 10px;font-size:12px;max-width:100%}
+  .pchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pchip button{border:0;background:transparent;color:inherit;font-size:15px;line-height:1;
+    cursor:pointer;padding:0 0 0 2px;opacity:.7}
+  /* 便签上的附件 */
+  .files{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
+  .fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--hair);
+    background:var(--paper);color:var(--ink-2);border-radius:9px;padding:6px 10px;
+    font-size:12.5px;cursor:pointer;max-width:100%}
+  .fchip:active{background:var(--accent-soft);border-color:var(--accent)}
+  .fchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:42vw}
+  .fchip .sz{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
   .crow{display:flex;gap:10px;align-items:center;padding-top:10px;border-top:1px solid var(--hair)}
+  .clip{border:0;background:transparent;color:var(--muted);cursor:pointer;padding:6px;
+    border-radius:9px;line-height:0}
+  .clip:active{background:var(--accent-soft);color:var(--accent)}
   .crow input{
     flex:1;min-width:0;background:transparent;border:0;outline:none;color:var(--ink-2);
     font-size:13.5px;font-family:inherit;padding:4px 0;
@@ -152,6 +171,8 @@
   .sheet .row button{flex:1;border-radius:12px;padding:12px;font-size:15px;font-weight:600;
     cursor:pointer;border:1px solid var(--hair);background:var(--surface);color:var(--ink-2)}
   .sheet .row button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .sheet .row button.danger{background:#a8402f;border-color:#a8402f;color:#fff}
+  .confirm-msg{font-size:14.5px;line-height:1.6;color:var(--ink-2);text-wrap:pretty}
 
   /* 底部栏 */
   .bar{
@@ -189,7 +210,11 @@
 
   <div class="composer">
     <textarea id="txt" placeholder="记点什么…"></textarea>
+    <div class="pending" id="pending"></div>
     <div class="crow">
+      <button class="clip" id="attach" type="button" aria-label="添加附件" title="添加附件">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.5-8.5a3.4 3.4 0 014.8 4.8l-8.5 8.5a1.8 1.8 0 01-2.5-2.5l7.8-7.8"/></svg>
+      </button>
       <input id="ntag" placeholder="贴个标签（可选）">
       <button class="submit" id="add">记下</button>
     </div>
@@ -239,12 +264,38 @@
   </button>
 </div>
 <input type="file" id="file" accept=".json,application/json" hidden>
+<input type="file" id="attFile" hidden multiple>
+
+<!-- 粘贴导入 -->
+<div class="mask" id="pasteMask">
+  <div class="sheet">
+    <h3>粘贴 JSON 导入</h3>
+    <textarea id="pasteText" placeholder="把导出的 JSON 粘贴到这里"></textarea>
+    <div class="row">
+      <button id="pasteCancel">取消</button>
+      <button class="primary" id="pasteOk">导入</button>
+    </div>
+  </div>
+</div>
+
+<!-- 通用确认 -->
+<div class="mask" id="confirmMask">
+  <div class="sheet">
+    <h3 id="confirmTitle">确认</h3>
+    <p id="confirmMsg" class="confirm-msg"></p>
+    <div class="row">
+      <button id="confirmCancel">取消</button>
+      <button class="primary danger" id="confirmOk">删除</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (function(){
   'use strict';
   var KEY='memo.notes.v1';
   var notes=[], filterTag=null, onlyPin=false, editingId=null, tt;
+  var pendingFiles=[];
   var $=function(s){return document.querySelector(s)};
   var listEl=$('#list');
   var bridge = window.MemoBridge || null;   // Android 壳注入
@@ -299,12 +350,17 @@
       acts.appendChild(iconBtn(n.pin?'on':'', ICON.pin, '置顶', function(){ n.pin=!n.pin; save(); render(); }));
       acts.appendChild(iconBtn('', ICON.edit, '编辑', function(){ openEdit(n.id) }));
       acts.appendChild(iconBtn('del', ICON.trash, '删除', function(){
-        notes=notes.filter(function(x){return x.id!==n.id}); save(); render(); toast('已删除');
+        askConfirm('删除这条便签？','删掉后无法恢复。附件也会一起删除。','删除',function(){
+          (n.files||[]).forEach(function(f){ if(bridge&&bridge.deleteAttachment) bridge.deleteAttachment(f.stored) });
+          notes=notes.filter(function(x){return x.id!==n.id}); save(); render(); toast('已删除');
+        });
       }));
       meta.appendChild(acts);
 
       var txt=document.createElement('div'); txt.className='txt'; txt.textContent=n.txt;
-      el.appendChild(txt); el.appendChild(meta);
+      el.appendChild(txt);
+      if(n.files&&n.files.length) el.appendChild(filesRow(n.files));
+      el.appendChild(meta);
       listEl.appendChild(el);
     });
 
@@ -323,6 +379,42 @@
     b.setAttribute('aria-label', title);
     b.innerHTML=svg; b.onclick=onClick; return b;
   }
+
+  function filesRow(files){
+    var row=document.createElement('div'); row.className='files';
+    files.forEach(function(f){
+      var b=document.createElement('button'); b.type='button'; b.className='fchip';
+      b.innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/><path d="M14 3v5h5"/></svg>';
+      var nm=document.createElement('span'); nm.textContent=f.name; b.appendChild(nm);
+      if(f.size){ var sz=document.createElement('span'); sz.className='sz'; sz.textContent=humanSize(f.size); b.appendChild(sz) }
+      b.onclick=function(){
+        if(bridge&&bridge.openAttachment){
+          var ok=bridge.openAttachment(f.stored);
+          if(!ok) toast('打不开这个附件');
+        } else toast('附件只能在 App 里打开');
+      };
+      row.appendChild(b);
+    });
+    return row;
+  }
+  function humanSize(n){
+    if(n<1024) return n+'B';
+    if(n<1048576) return (n/1024).toFixed(0)+'KB';
+    return (n/1048576).toFixed(1)+'MB';
+  }
+
+  function askConfirm(title,msg,okText,onOk){
+    $('#confirmTitle').textContent=title;
+    $('#confirmMsg').textContent=msg;
+    $('#confirmOk').textContent=okText||'确定';
+    $('#confirmMask').classList.add('show');
+    $('#confirmOk').onclick=function(){
+      $('#confirmMask').classList.remove('show');
+      if(onOk) onOk();
+    };
+  }
+  $('#confirmCancel').onclick=function(){ $('#confirmMask').classList.remove('show') };
+  $('#confirmMask').addEventListener('click',function(e){ if(e.target===this) this.classList.remove('show') });
 
   function renderTags(){
     var tally={}, order=[];
@@ -344,12 +436,57 @@
 
   function add(){
     var v=$('#txt').value.trim();
-    if(!v){ toast('先写点什么'); return }
+    if(!v && !pendingFiles.length){ toast('写点什么，或加个附件'); return }
     notes.unshift({ id:Date.now()+''+Math.floor(Math.random()*1e4),
-      txt:v, tag:$('#ntag').value.trim(), ts:Date.now(), pin:false });
-    $('#txt').value=''; $('#ntag').value=''; $('#txt').focus();
+      txt:v, tag:$('#ntag').value.trim(), ts:Date.now(), pin:false,
+      files:pendingFiles.slice() });
+    $('#txt').value=''; $('#ntag').value=''; pendingFiles=[]; renderPending();
+    $('#txt').focus();
     save(); render(); toast('已记下');
   }
+
+  // ——— 附件 ———
+  function renderPending(){
+    var box=$('#pending'); box.innerHTML='';
+    pendingFiles.forEach(function(f,i){
+      var c=document.createElement('span'); c.className='pchip';
+      var nm=document.createElement('span'); nm.textContent=f.name+' · '+humanSize(f.size);
+      var x=document.createElement('button'); x.type='button'; x.textContent='✕';
+      x.onclick=function(){
+        if(bridge&&bridge.deleteAttachment) bridge.deleteAttachment(f.stored);
+        pendingFiles.splice(i,1); renderPending();
+      };
+      c.appendChild(nm); c.appendChild(x); box.appendChild(c);
+    });
+  }
+
+  $('#attach').onclick=function(){
+    if(!bridge){ toast('附件功能需要 App 版本'); return }
+    $('#attFile').click();
+  };
+
+  $('#attFile').addEventListener('change',function(e){
+    var list=e.target.files; if(!list||!list.length) return;
+    var arr=[].slice.call(list);
+    e.target.value='';
+    var done=0;
+    arr.forEach(function(file){
+      if(file.size>30*1024*1024){ toast(file.name+' 超过 30MB，跳过'); done++; return }
+      var r=new FileReader();
+      r.onload=function(){
+        var s=String(r.result), comma=s.indexOf(',');
+        var b64=comma>=0?s.slice(comma+1):s;
+        var stored=bridge.saveAttachment(file.name,b64);
+        if(stored){
+          pendingFiles.push({name:file.name,stored:stored,size:file.size});
+          renderPending();
+        } else toast('存入失败：'+file.name);
+        done++;
+      };
+      r.onerror=function(){ toast('读取失败：'+file.name); done++ };
+      r.readAsDataURL(file);
+    });
+  });
 
   function openEdit(id){
     var n=notes.filter(function(x){return x.id===id})[0]; if(!n) return;
@@ -465,15 +602,25 @@
 
   // 粘贴导入：WebView / 任何环境都可靠的那条路
   $('#t-paste').onclick=function(){
-    var text=prompt('把导出的 JSON 粘贴到这里：','');
-    if(text===null) return;
-    if(!text.trim()){ toast('空内容'); return }
-    importText(text.trim());
+    $('#pasteText').value='';
+    $('#pasteMask').classList.add('show');
+    setTimeout(function(){ $('#pasteText').focus() },60);
+  };
+  $('#pasteCancel').onclick=function(){ $('#pasteMask').classList.remove('show') };
+  $('#pasteMask').addEventListener('click',function(e){ if(e.target===this) this.classList.remove('show') });
+  $('#pasteOk').onclick=function(){
+    var text=$('#pasteText').value.trim();
+    if(!text){ toast('空内容'); return }
+    $('#pasteMask').classList.remove('show');
+    importText(text);
   };
 
   $('#t-clear').onclick=function(){
     if(!notes.length){ toast('本来就是空的'); return }
-    if(confirm('清空全部 '+notes.length+' 条便签？无法恢复。')){ notes=[]; save(); render(); toast('已清空') }
+    askConfirm('清空全部便签？','共 '+notes.length+' 条，附件会一并删除，无法恢复。','全部清空',function(){
+      notes.forEach(function(n){ (n.files||[]).forEach(function(f){ if(bridge&&bridge.deleteAttachment) bridge.deleteAttachment(f.stored) }) });
+      notes=[]; save(); render(); toast('已清空');
+    });
   };
 
   load();
