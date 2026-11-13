@@ -471,6 +471,7 @@
     });
 
     $('#count').textContent = notes.length ? notes.length+' 条' : '';
+    if(bridge&&bridge.appVersion) $('#count').textContent += '  ·  v'+bridge.appVersion();
     renderCats(); fillCatPickers();
     renderTags();
   }

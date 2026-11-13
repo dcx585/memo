@@ -12,8 +12,9 @@ android {
         applicationId "app.dcx.memo"
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName "1.1"
+        // CI 注入 APP_VERSION_CODE / APP_VERSION_NAME；本地构建用兜底值
+        versionCode (System.getenv("APP_VERSION_CODE") ?: "1").toInteger()
+        versionName (System.getenv("APP_VERSION_NAME") ?: "1.1")
     }
 
     signingConfigs {

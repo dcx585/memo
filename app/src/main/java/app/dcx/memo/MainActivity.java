@@ -511,6 +511,19 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public boolean openUrl(String url) {
+            try {
+                Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                return true;
+            } catch (Exception e) {
+                toast("打不开链接");
+                return false;
+            }
+        }
+
+        @JavascriptInterface
         public String appVersion() {
             try {
                 return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
