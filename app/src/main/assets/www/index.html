@@ -77,6 +77,8 @@
   .fchip:active{background:var(--accent-soft);border-color:var(--accent)}
   .fchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:42vw}
   .fchip .sz{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+  .fchip.missing{border-style:dashed;opacity:.75;color:var(--muted)}
+  .fchip.missing .badge{font-size:10.5px;color:#a8402f}
   .crow{display:flex;gap:10px;align-items:center;padding-top:10px;border-top:1px solid var(--hair)}
   .clip{border:0;background:transparent;color:var(--muted);cursor:pointer;padding:6px;
     border-radius:9px;line-height:0}
@@ -488,9 +490,17 @@
     files.forEach(function(f){
       var b=document.createElement('button'); b.type='button'; b.className='fchip';
       b.innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/><path d="M14 3v5h5"/></svg>';
-      var nm=document.createElement('span'); nm.textContent=f.name; b.appendChild(nm);
+      var exists=true;
+      if(bridge&&bridge.fileExists&&f.stored) exists=bridge.fileExists(f.stored);
+      if(!exists) b.className+=' missing';
+      var nm=document.createElement('span'); nm.textContent=f.name||'(未命名)'; b.appendChild(nm);
       if(f.size){ var sz=document.createElement('span'); sz.className='sz'; sz.textContent=humanSize(f.size); b.appendChild(sz) }
+      if(!exists){
+        var bg=document.createElement('span'); bg.className='badge'; bg.textContent='缺文件';
+        b.appendChild(bg);
+      }
       b.onclick=function(){
+        if(!exists){ toast('这条记录有这个附件，但文件不在本机：用 ZIP 完整备份导入才会带上'); return }
         if(bridge&&bridge.openAttachment){
           var ok=bridge.openAttachment(f.stored);
           if(!ok) toast('打不开这个附件');
@@ -883,8 +893,16 @@
     var n=0;
     arr.forEach(function(it){
       if(!it||typeof it.txt!=='string'||!it.txt.trim()) return;
+      var files=[];
+      if(Array.isArray(it.files)){
+        it.files.forEach(function(f){
+          if(f&&(f.stored||f.name))
+            files.push({name:f.name||'', stored:f.stored||'', size:parseInt(f.size,10)||0});
+        });
+      }
       notes.push({ id:it.id||Date.now()+''+Math.floor(Math.random()*1e4),
-        txt:it.txt.trim(), tag:it.tag||'', ts:it.ts||Date.now(), pin:!!it.pin });
+        txt:it.txt.trim(), tag:it.tag||'', cat:it.cat||'',
+        ts:it.ts||Date.now(), pin:!!it.pin, files:files });
       n++;
     });
     if(!n){ toast('没有可导入的条目'); return }

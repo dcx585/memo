@@ -436,6 +436,15 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public boolean fileExists(String storedName) {
+            try {
+                return new File(attestDir(), storedName).exists();
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
         public boolean deleteAttachment(String storedName) {
             try {
                 File f = new File(attestDir(), storedName);
