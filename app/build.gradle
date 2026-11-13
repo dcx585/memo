@@ -2,6 +2,8 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+def ksFile = rootProject.file("release.jks")
+
 android {
     namespace 'app.dcx.memo'
     compileSdk 34
@@ -16,7 +18,6 @@ android {
 
     signingConfigs {
         release {
-            def ksFile = rootProject.file("release.jks")
             if (ksFile.exists()) {
                 storeFile ksFile
                 storePassword System.getenv("RELEASE_KEYSTORE_PASS") ?: "memo123456"
@@ -29,7 +30,8 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.release
+            // 有 keystore 就签名，没有就退回 debug 签名，保证 CI 永远能出包
+            signingConfig ksFile.exists() ? signingConfigs.release : signingConfigs.debug
         }
     }
 
@@ -37,7 +39,4 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-}
-
-dependencies {
 }
