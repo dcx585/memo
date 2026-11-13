@@ -1,12 +1,10 @@
 package app.dcx.memo;
 
 import android.app.Activity;
-import android.content.ContentValues;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
 import android.provider.MediaStore;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -16,19 +14,31 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 public class MainActivity extends Activity {
 
     private static final int REQ_FILE = 1001;
     private static final int REQ_CREATE = 1002;
     private static final int REQ_TREE = 1003;
+    private static final int REQ_IMPORT = 1004;
+
     private WebView web;
     private ValueCallback<Uri[]> fileCallback;
-    private String pendingContent;
+    private byte[] pendingBytes;
+    private String pendingMime = "application/octet-stream";
+    private String pendingName = "file";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -64,12 +74,11 @@ public class MainActivity extends Activity {
         });
         setContentView(web);
 
-        // Android 8/9 以下导出需要写外部存储权限
         if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT < 29
                 && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{
-                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1002);
+                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, 2001);
         }
 
         web.loadUrl("file:///android_asset/www/index.html");
@@ -95,25 +104,25 @@ public class MainActivity extends Activity {
             }
             return;
         }
+
         if (requestCode == REQ_CREATE) {
             if (resultCode == RESULT_OK && data != null && data.getData() != null
-                    && pendingContent != null) {
+                    && pendingBytes != null) {
                 try {
                     OutputStream os = getContentResolver().openOutputStream(data.getData());
                     if (os != null) {
-                        os.write(pendingContent.getBytes(StandardCharsets.UTF_8));
+                        os.write(pendingBytes);
                         os.close();
-                        toast("已保存");
-                    } else {
-                        toast("保存失败");
-                    }
+                        toast("已保存：" + pendingName);
+                    } else toast("保存失败");
                 } catch (Exception e) {
                     toast("保存失败：" + e.getMessage());
                 }
             }
-            pendingContent = null;
+            pendingBytes = null;
             return;
         }
+
         if (requestCode == REQ_TREE) {
             if (resultCode == RESULT_OK && data != null && data.getData() != null) {
                 final Uri tree = data.getData();
@@ -123,65 +132,22 @@ public class MainActivity extends Activity {
             }
             return;
         }
+
+        if (requestCode == REQ_IMPORT) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                final Uri uri = data.getData();
+                new Thread(new Runnable() {
+                    public void run() { readBackup(uri); }
+                }).start();
+            } else {
+                runOnUiThread(new Runnable() {
+                    public void run() { callJs("window.__importResult&&window.__importResult('{\"kind\":\"cancel\"}')"); }
+                });
+            }
+            return;
+        }
+
         super.onActivityResult(requestCode, resultCode, data);
-    }
-
-    /** 把选中文件夹里的文件全部复制进私有目录，然后回传 JSON 给网页。 */
-    private void importTree(Uri treeUri) {
-        try {
-            androidx.documentfile.provider.DocumentFile root =
-                    androidx.documentfile.provider.DocumentFile.fromTreeUri(this, treeUri);
-            if (root == null) { toast("读取文件夹失败"); return; }
-            File dir = new File(getFilesDir(), "attachments");
-            if (!dir.exists() && !dir.mkdirs()) { toast("创建目录失败"); return; }
-            org.json.JSONArray out = new org.json.JSONArray();
-            final int[] budget = {40};
-            final long[] bytesLeft = {30L * 1024 * 1024};
-            walk(root, dir, out, budget, bytesLeft, 0);
-            final String json = out.toString();
-            runOnUiThread(new Runnable() {
-                public void run() {
-                    web.evaluateJavascript(
-                        "window.__folderResult&&window.__folderResult(" + json + ")", null);
-                }
-            });
-        } catch (Exception e) {
-            toast("导入失败：" + e.getMessage());
-        }
-    }
-
-    private void walk(androidx.documentfile.provider.DocumentFile node, File dstDir,
-                      org.json.JSONArray out, int[] budget, long[] bytesLeft, int depth) {
-        if (depth > 4 || budget[0] <= 0 || node == null) return;
-        for (androidx.documentfile.provider.DocumentFile f : node.listFiles()) {
-            if (budget[0] <= 0) return;
-            if (f.isDirectory()) { walk(f, dstDir, out, budget, bytesLeft, depth + 1); continue; }
-            String name = f.getName() == null ? "file" : f.getName();
-            String safe = name.replaceAll("[\\\\/:*?\"<>|]", "_");
-            String stored = System.currentTimeMillis() + "_" + safe;
-            try {
-                java.io.InputStream in = getContentResolver().openInputStream(f.getUri());
-                if (in == null) continue;
-                File target = new File(dstDir, stored);
-                FileOutputStream os = new FileOutputStream(target);
-                byte[] buf = new byte[8192];
-                long written = 0;
-                int r;
-                while ((r = in.read(buf)) > 0) {
-                    if (written + r > bytesLeft[0]) { os.close(); in.close();
-                        target.delete(); return; }
-                    os.write(buf, 0, r); written += r;
-                }
-                os.close(); in.close();
-                bytesLeft[0] -= written;
-                budget[0]--;
-                org.json.JSONObject o = new org.json.JSONObject();
-                o.put("name", name);
-                o.put("stored", stored);
-                o.put("size", written);
-                out.put(o);
-            } catch (Exception ignored) { }
-        }
     }
 
     @Override
@@ -196,6 +162,129 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void callJs(final String js) {
+        runOnUiThread(new Runnable() {
+            public void run() { web.evaluateJavascript(js, null); }
+        });
+    }
+
+    private File attestDir() {
+        File dir = new File(getFilesDir(), "attachments");
+        if (!dir.exists()) dir.mkdirs();
+        return dir;
+    }
+
+    /** 读回备份：zip → 解包附件 + 返回 notes.json；json/csv → 直接返回文本。 */
+    private void readBackup(Uri uri) {
+        try {
+            InputStream in = getContentResolver().openInputStream(uri);
+            if (in == null) { toast("读不到这个文件"); return; }
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            byte[] b = new byte[8192];
+            int r;
+            while ((r = in.read(b)) > 0) buf.write(b, 0, r);
+            in.close();
+            byte[] all = buf.toByteArray();
+
+            if (all.length > 2 && all[0] == 'P' && all[1] == 'K') {
+                ZipInputStream zis = new ZipInputStream(new java.io.ByteArrayInputStream(all));
+                ZipEntry e;
+                String notesJson = null;
+                int restored = 0;
+                File dir = attestDir();
+                while ((e = zis.getNextEntry()) != null) {
+                    String entryName = e.getName();
+                    if (entryName.endsWith("notes.json")) {
+                        ByteArrayOutputStream nb = new ByteArrayOutputStream();
+                        byte[] tb = new byte[8192];
+                        int tr;
+                        while ((tr = zis.read(tb)) > 0) nb.write(tb, 0, tr);
+                        notesJson = nb.toString("UTF-8");
+                    } else if (entryName.startsWith("attachments/") && !e.isDirectory()) {
+                        String base = entryName.substring("attachments/".length());
+                        if (base.contains("/")) base = base.substring(base.lastIndexOf('/') + 1);
+                        File out = new File(dir, base);
+                        FileOutputStream fos = new FileOutputStream(out);
+                        byte[] tb = new byte[8192];
+                        int tr;
+                        while ((tr = zis.read(tb)) > 0) fos.write(tb, 0, tr);
+                        fos.close();
+                        restored++;
+                    }
+                    zis.closeEntry();
+                }
+                zis.close();
+                if (notesJson == null) { toast("备份里没有 notes.json"); return; }
+                JSONObject res = new JSONObject();
+                res.put("kind", "zip");
+                res.put("text", notesJson);
+                res.put("restored", restored);
+                callJs("window.__importResult&&window.__importResult(" + JSONObject.quote(res.toString()) + ")");
+                return;
+            }
+
+            String text = new String(all, StandardCharsets.UTF_8).trim();
+            String kind = (text.startsWith("[") || text.startsWith("{")) ? "json" : "csv";
+            JSONObject res = new JSONObject();
+            res.put("kind", kind);
+            res.put("text", text);
+            callJs("window.__importResult&&window.__importResult(" + JSONObject.quote(res.toString()) + ")");
+        } catch (Exception e) {
+            toast("读取失败：" + e.getMessage());
+        }
+    }
+
+    private void importTree(Uri treeUri) {
+        try {
+            androidx.documentfile.provider.DocumentFile root =
+                    androidx.documentfile.provider.DocumentFile.fromTreeUri(this, treeUri);
+            if (root == null) { toast("读取文件夹失败"); return; }
+            File dir = attestDir();
+            JSONArray out = new JSONArray();
+            int[] budget = {40};
+            long[] bytesLeft = {30L * 1024 * 1024};
+            walk(root, dir, out, budget, bytesLeft, 0);
+            final String json = out.toString();
+            callJs("window.__folderResult&&window.__folderResult(" + json + ")");
+        } catch (Exception e) {
+            toast("导入失败：" + e.getMessage());
+        }
+    }
+
+    private void walk(androidx.documentfile.provider.DocumentFile node, File dstDir,
+                      JSONArray out, int[] budget, long[] bytesLeft, int depth) {
+        if (depth > 4 || budget[0] <= 0 || node == null) return;
+        for (androidx.documentfile.provider.DocumentFile f : node.listFiles()) {
+            if (budget[0] <= 0) return;
+            if (f.isDirectory()) { walk(f, dstDir, out, budget, bytesLeft, depth + 1); continue; }
+            String name = f.getName() == null ? "file" : f.getName();
+            String safe = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+            String stored = System.currentTimeMillis() + "_" + safe;
+            try {
+                InputStream in = getContentResolver().openInputStream(f.getUri());
+                if (in == null) continue;
+                File target = new File(dstDir, stored);
+                FileOutputStream os = new FileOutputStream(target);
+                byte[] buf = new byte[8192];
+                long written = 0;
+                int r;
+                while ((r = in.read(buf)) > 0) {
+                    if (written + r > bytesLeft[0]) { os.close(); in.close();
+                        target.delete(); return; }
+                    os.write(buf, 0, r); written += r;
+                }
+                os.close(); in.close();
+                bytesLeft[0] -= written;
+                budget[0]--;
+                JSONObject o = new JSONObject();
+                o.put("name", name);
+                o.put("stored", stored);
+                o.put("size", written);
+                out.put(o);
+            } catch (Exception ignored) { }
+        }
+    }
+
     private static String guessMime(String name) {
         String n = name.toLowerCase();
         if (n.endsWith(".pdf")) return "application/pdf";
@@ -205,6 +294,7 @@ public class MainActivity extends Activity {
         if (n.endsWith(".webp")) return "image/webp";
         if (n.endsWith(".txt") || n.endsWith(".md")) return "text/plain";
         if (n.endsWith(".json")) return "application/json";
+        if (n.endsWith(".csv")) return "text/csv";
         if (n.endsWith(".zip")) return "application/zip";
         if (n.endsWith(".doc")) return "application/msword";
         if (n.endsWith(".docx"))
@@ -217,68 +307,93 @@ public class MainActivity extends Activity {
         return "*/*";
     }
 
-    /** 供网页调用的桥。 */
+    /** 网页侧调用的接口 */
     class Bridge {
-        /** 尝试直接写入「下载」目录；返回落盘全路径，失败返回空串。 */
-        @JavascriptInterface
-        public String saveFile(String name, String content) {
-            try {
-                byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
-                if (Build.VERSION.SDK_INT >= 29) {
-                    ContentValues cv = new ContentValues();
-                    cv.put(MediaStore.Downloads.DISPLAY_NAME, name);
-                    cv.put(MediaStore.Downloads.MIME_TYPE, "application/json");
-                    cv.put(MediaStore.Downloads.RELATIVE_PATH,
-                            Environment.DIRECTORY_DOWNLOADS + "/");
-                    cv.put(MediaStore.Downloads.IS_PENDING, 1);
-                    Uri uri = getContentResolver()
-                            .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
-                    if (uri == null) return "";
-                    OutputStream os = getContentResolver().openOutputStream(uri);
-                    if (os == null) return "";
-                    os.write(bytes);
-                    os.close();
-                    cv.clear();
-                    cv.put(MediaStore.Downloads.IS_PENDING, 0);
-                    getContentResolver().update(uri, cv, null, null);
-                    return "/storage/emulated/0/Download/" + name;
-                }
-                File dir = Environment.getExternalStoragePublicDirectory(
-                        Environment.DIRECTORY_DOWNLOADS);
-                if (!dir.exists() && !dir.mkdirs()) return "";
-                File f = new File(dir, name);
-                FileOutputStream fos = new FileOutputStream(f);
-                fos.write(bytes);
-                fos.close();
-                return f.getAbsolutePath();
-            } catch (Exception e) {
-                return "";
-            }
-        }
 
-        /** 兜底：让用户自己选保存位置（系统保存框），不依赖任何目录约定。 */
+        /** 打包备份：notes.json + attachments/* → zip，交给系统保存框。 */
         @JavascriptInterface
-        public boolean pickSave(String name, String content) {
-            pendingContent = content;
+        public boolean exportZip(String notesJson, String fileName) {
             try {
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                ZipOutputStream zos = new ZipOutputStream(bos);
+                zos.putNextEntry(new ZipEntry("notes.json"));
+                zos.write(notesJson.getBytes(StandardCharsets.UTF_8));
+                zos.closeEntry();
+
+                JSONArray arr = new JSONArray(notesJson);
+                File dir = attestDir();
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONArray files = arr.getJSONObject(i).optJSONArray("files");
+                    if (files == null) continue;
+                    for (int j = 0; j < files.length(); j++) {
+                        String stored = files.getJSONObject(j).optString("stored", "");
+                        if (stored.isEmpty()) continue;
+                        File f = new File(dir, stored);
+                        if (!f.exists()) continue;
+                        zos.putNextEntry(new ZipEntry("attachments/" + stored));
+                        InputStream in = new java.io.FileInputStream(f);
+                        byte[] buf = new byte[8192];
+                        int r;
+                        while ((r = in.read(buf)) > 0) zos.write(buf, 0, r);
+                        in.close();
+                        zos.closeEntry();
+                    }
+                }
+                zos.finish();
+                zos.close();
+                pendingBytes = bos.toByteArray();
+                pendingMime = "application/zip";
+                pendingName = fileName;
                 Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
                 i.addCategory(Intent.CATEGORY_OPENABLE);
-                i.setType("application/json");
-                i.putExtra(Intent.EXTRA_TITLE, name);
+                i.setType("application/zip");
+                i.putExtra(Intent.EXTRA_TITLE, fileName);
                 startActivityForResult(i, REQ_CREATE);
                 return true;
             } catch (Exception e) {
-                pendingContent = null;
+                toast("打包失败：" + e.getMessage());
                 return false;
             }
         }
 
-        /** 存附件：base64 内容写入应用私有目录，返回存储名（失败返回空串）。 */
+        /** 导出纯文本（CSV / JSON），同样走系统保存框。 */
+        @JavascriptInterface
+        public boolean exportText(String content, String fileName, String mime) {
+            try {
+                pendingBytes = content.getBytes(StandardCharsets.UTF_8);
+                pendingMime = mime == null ? "text/plain" : mime;
+                pendingName = fileName;
+                Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType(pendingMime);
+                i.putExtra(Intent.EXTRA_TITLE, fileName);
+                startActivityForResult(i, REQ_CREATE);
+                return true;
+            } catch (Exception e) {
+                toast("导出失败：" + e.getMessage());
+                return false;
+            }
+        }
+
+        /** 选一个备份文件（zip/json/csv）读回来。 */
+        @JavascriptInterface
+        public boolean pickBackup() {
+            try {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("*/*");
+                startActivityForResult(i, REQ_IMPORT);
+                return true;
+            } catch (Exception e) {
+                toast("打不开文件选择器");
+                return false;
+            }
+        }
+
         @JavascriptInterface
         public String saveAttachment(String fileName, String base64) {
             try {
-                File dir = new File(getFilesDir(), "attachments");
-                if (!dir.exists() && !dir.mkdirs()) return "";
+                File dir = attestDir();
                 String safe = fileName == null ? "file"
                         : fileName.replaceAll("[\\\\/:*?\"<>|]", "_");
                 String stored = System.currentTimeMillis() + "_" + safe;
@@ -292,11 +407,10 @@ public class MainActivity extends Activity {
             }
         }
 
-        /** 打开附件：交给系统选择能处理它的应用。 */
         @JavascriptInterface
         public boolean openAttachment(String storedName) {
             try {
-                File f = new File(new File(getFilesDir(), "attachments"), storedName);
+                File f = new File(attestDir(), storedName);
                 if (!f.exists()) { toast("附件已不存在"); return false; }
                 Uri uri = androidx.core.content.FileProvider.getUriForFile(
                         MainActivity.this, "app.dcx.memo.fileprovider", f);
@@ -321,18 +435,16 @@ public class MainActivity extends Activity {
             }
         }
 
-        /** 删除附件文件。 */
         @JavascriptInterface
         public boolean deleteAttachment(String storedName) {
             try {
-                File f = new File(new File(getFilesDir(), "attachments"), storedName);
+                File f = new File(attestDir(), storedName);
                 return f.exists() && f.delete();
             } catch (Exception e) {
                 return false;
             }
         }
 
-        /** 选整个文件夹：递归复制里面的文件，结果通过 window.__folderResult 回传。 */
         @JavascriptInterface
         public boolean pickFolder() {
             try {
@@ -347,7 +459,6 @@ public class MainActivity extends Activity {
             }
         }
 
-        /** 打开系统「下载」目录，方便用户看到导出的文件。 */
         @JavascriptInterface
         public boolean openDownloads() {
             String[] candidates = {

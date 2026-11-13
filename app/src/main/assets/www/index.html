@@ -284,6 +284,41 @@
 <input type="file" id="file" accept=".json,application/json" hidden>
 <input type="file" id="attFile" hidden multiple>
 
+<!-- 导出选项 -->
+<div class="mask" id="expOptMask">
+  <div class="sheet">
+    <h3>导出</h3>
+    <p class="confirm-msg">完整备份会把附件原文件一起打包，换机或重装后能原样恢复。</p>
+    <div class="row">
+      <button class="primary" id="expZip">完整备份（ZIP，含附件）</button>
+    </div>
+    <div class="row">
+      <button id="expCsv">表格 CSV（仅文字）</button>
+      <button id="expJson">数据 JSON</button>
+    </div>
+    <div class="row">
+      <button id="expOptCancel" style="flex:1">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- 导入选项 -->
+<div class="mask" id="impOptMask">
+  <div class="sheet">
+    <h3>导入</h3>
+    <p class="confirm-msg">支持 .zip 完整备份、.json 数据、.csv 表格，自动识别。</p>
+    <div class="row">
+      <button class="primary" id="impFile">从文件导入</button>
+    </div>
+    <div class="row">
+      <button id="impPaste">粘贴 JSON</button>
+    </div>
+    <div class="row">
+      <button id="impOptCancel" style="flex:1">取消</button>
+    </div>
+  </div>
+</div>
+
 <!-- 导出结果 -->
 <div class="mask" id="expMask">
   <div class="sheet">
@@ -681,6 +716,123 @@
 
   // ——— 导出 ———
   function exportAll(){
+    if(bridge){ $('#expOptMask').classList.add('show'); return }
+    return exportBrowser();
+  }
+
+  function exportZip(){
+    if(!bridge||!bridge.exportZip){ toast('需要 App 版本'); return }
+    var name='memo-backup-'+ymd()+'.zip';
+    if(!bridge.exportZip(dump(),name)) toast('打包失败');
+  }
+
+  function exportCSV(){
+    var name='memo-'+ymd()+'.csv';
+    var csv=buildCSV();
+    if(bridge&&bridge.exportText){ if(!bridge.exportText(csv,name,'text/csv')) toast('导出失败'); return }
+    downloadText(csv,name,'text/csv');
+  }
+
+  function exportJSON(){
+    var name='memo-'+ymd()+'.json';
+    if(bridge&&bridge.exportText){ if(!bridge.exportText(dump(),name,'application/json')) toast('导出失败'); return }
+    downloadText(dump(),name,'application/json');
+  }
+
+  function downloadText(text,name,mime){
+    try{
+      var blob=new Blob([text],{type:mime});
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(blob); a.download=name;
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove() },1500);
+      toast('已导出 '+name);
+    }catch(e){ copyToClipboard(text) }
+  }
+
+  function exportBrowser(){ downloadText(dump(),'memo-'+ymd()+'.json','application/json') }
+
+  // ——— CSV ———
+  function csvCell(v){
+    v=(v===null||v===undefined)?'':String(v);
+    if(/[",\n\r]/.test(v)) return '"'+v.replace(/"/g,'""')+'"';
+    return v;
+  }
+  function buildCSV(){
+    var head=['时间','分类','标签','内容','附件'];
+    var lines=[head.map(csvCell).join(',')];
+    notes.forEach(function(n){
+      var files=(n.files||[]).map(function(f){ return f.name+'|'+(f.stored||'')+'|'+(f.size||0) }).join(';');
+      lines.push([
+        new Date(n.ts).toISOString(),
+        n.cat||'',
+        n.tag||'',
+        n.txt||'',
+        files
+      ].map(csvCell).join(','));
+    });
+    return '\ufeff'+lines.join('\r\n');
+  }
+  function parseCSV(text){
+    var rows=[],row=[],cell='',q=false;
+    text=text.replace(/^\ufeff/,'');
+    for(var i=0;i<text.length;i++){
+      var c=text[i];
+      if(q){
+        if(c==='"'){ if(text[i+1]==='"'){ cell+='"'; i++ } else q=false }
+        else cell+=c;
+      } else {
+        if(c==='"') q=true;
+        else if(c===','){ row.push(cell); cell='' }
+        else if(c==='\n'){ row.push(cell); rows.push(row); row=[]; cell='' }
+        else if(c==='\r'){ }
+        else cell+=c;
+      }
+    }
+    row.push(cell);
+    if(row.length>1||row[0]!=='') rows.push(row);
+    return rows;
+  }
+  function importCSV(text){
+    var rows=parseCSV(text);
+    if(!rows.length){ toast('CSV 是空的'); return }
+    var start=/时间|内容|content|txt/i.test(rows[0].join(''))?1:0;
+    var n=0;
+    for(var i=start;i<rows.length;i++){
+      var r=rows[i]; if(!r||!r.length) continue;
+      var txt=(r[3]||'').trim();
+      if(!txt) continue;
+      var ts=Date.parse(r[0]||'')||Date.now();
+      var files=[];
+      (r[4]||'').split(';').forEach(function(x){
+        x=x.trim(); if(!x) return;
+        var parts=x.split('|');
+        if(parts[0]) files.push({name:parts[0],stored:parts[1]||'',size:parseInt(parts[2]||'0',10)||0});
+      });
+      notes.push({ id:Date.now()+''+Math.floor(Math.random()*1e4),
+        txt:txt, cat:(r[1]||'').trim(), tag:(r[2]||'').trim(), ts:ts, pin:false, files:files });
+      n++;
+    }
+    if(!n){ toast('没有可导入的行'); return }
+    save(); render(); toast('导入 '+n+' 条');
+  }
+
+  // 壳读回备份后的回调
+  window.__importResult=function(raw){
+    var res;
+    try{ res=(typeof raw==='string')?JSON.parse(raw):raw }catch(e){ toast('备份格式不对'); return }
+    if(res.kind==='cancel') return;
+    if(res.kind==='csv'){ importCSV(res.text||''); return }
+    if(res.kind==='json'||res.kind==='zip'){
+      var msg='导入完成';
+      if(res.kind==='zip'&&typeof res.restored==='number') msg='已恢复 '+res.restored+' 个附件';
+      importText(res.text||'', msg);
+      return;
+    }
+    toast('无法识别的备份');
+  };
+
+  function exportAllLegacy(){
     var name='memo-'+ymd()+'.json';
     var data=dump();
     if(bridge&&bridge.saveFile){
@@ -724,7 +876,7 @@
   }
 
   // ——— 导入 ———
-  function importText(text){
+  function importText(text, okMsg){
     var arr;
     try{ arr=JSON.parse(text) }catch(e){ toast('不是合法的 JSON'); return }
     if(!Array.isArray(arr)){ toast('格式不对：应为数组'); return }
@@ -736,12 +888,13 @@
       n++;
     });
     if(!n){ toast('没有可导入的条目'); return }
-    save(); render(); toast('导入 '+n+' 条');
+    save(); render(); toast((okMsg||'导入')+' '+n+' 条');
   }
 
   $('#t-export').onclick=exportAll;
 
   $('#t-import').onclick=function(){
+    if(bridge){ $('#impOptMask').classList.add('show'); return }
     var f=$('#file');
     // WebView 里必须由壳实现文件选择器；先尝试，没反应再提示用「粘贴」
     f.click();
@@ -760,6 +913,27 @@
     e.target.value='';
   });
 
+  // 导出面板
+  $('#expOptCancel').onclick=function(){ $('#expOptMask').classList.remove('show') };
+  $('#expOptMask').addEventListener('click',function(e){ if(e.target===this) this.classList.remove('show') });
+  $('#expZip').onclick=function(){ $('#expOptMask').classList.remove('show'); exportZip() };
+  $('#expCsv').onclick=function(){ $('#expOptMask').classList.remove('show'); exportCSV() };
+  $('#expJson').onclick=function(){ $('#expOptMask').classList.remove('show'); exportJSON() };
+
+  // 导入面板
+  $('#impOptCancel').onclick=function(){ $('#impOptMask').classList.remove('show') };
+  $('#impOptMask').addEventListener('click',function(e){ if(e.target===this) this.classList.remove('show') });
+  $('#impFile').onclick=function(){
+    $('#impOptMask').classList.remove('show');
+    if(bridge&&bridge.pickBackup){ bridge.pickBackup(); return }
+    $('#file').click();
+  };
+  $('#impPaste').onclick=function(){
+    $('#impOptMask').classList.remove('show');
+    $('#pasteText').value=''; $('#pasteMask').classList.add('show');
+    setTimeout(function(){ $('#pasteText').focus() },60);
+  };
+
   // 粘贴导入：WebView / 任何环境都可靠的那条路
   $('#t-paste').onclick=function(){
     $('#pasteText').value='';
@@ -772,7 +946,8 @@
     var text=$('#pasteText').value.trim();
     if(!text){ toast('空内容'); return }
     $('#pasteMask').classList.remove('show');
-    importText(text);
+    if(text[0]==='['||text[0]==='{') importText(text);
+    else importCSV(text);
   };
 
   $('#t-clear').onclick=function(){
