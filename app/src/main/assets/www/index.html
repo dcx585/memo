@@ -110,6 +110,16 @@
   .chip-btn.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
 
   .tag-row{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:16px}
+  .cat-row{display:flex;gap:7px;overflow-x:auto;padding:0 0 12px;margin:0 -2px;
+    scrollbar-width:none}
+  .cat-row::-webkit-scrollbar{display:none}
+  .cat{flex:none;border:1px solid var(--hair);background:var(--surface);color:var(--ink-2);
+    border-radius:999px;padding:6px 13px;font-size:13px;cursor:pointer;white-space:nowrap;
+    font-variant-numeric:tabular-nums}
+  .cat.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  .cat.add{border-style:dashed;color:var(--muted)}
+  .catpick{max-width:96px;background:transparent;border:0;color:var(--ink-2);font-size:13px;
+    font-family:inherit;outline:none;padding:4px 0;text-overflow:ellipsis}
   .tag-chip{
     font-size:12.5px;color:var(--muted);background:transparent;border:1px solid var(--hair);
     border-radius:999px;padding:5px 12px;cursor:pointer;font-variant-numeric:tabular-nums;
@@ -132,6 +142,8 @@
   .note .meta{display:flex;align-items:center;gap:9px;margin-top:11px;flex-wrap:wrap}
   .note .time{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;letter-spacing:.02em}
   .note .ntag{font-size:11px;color:var(--accent);background:var(--accent-soft);
+    padding:2px 9px;border-radius:999px}
+  .note .cat-tag{font-size:11px;color:#7a5a2e;background:rgba(180,118,60,.13);
     padding:2px 9px;border-radius:999px}
   .note .acts{margin-left:auto;display:flex;gap:1px}
   .ib{background:transparent;border:0;color:var(--muted);cursor:pointer;
@@ -173,6 +185,9 @@
   .sheet .row button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
   .sheet .row button.danger{background:#a8402f;border-color:#a8402f;color:#fff}
   .confirm-msg{font-size:14.5px;line-height:1.6;color:var(--ink-2);text-wrap:pretty}
+  .exp-path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+    line-height:1.55;color:var(--muted);word-break:break-all;background:var(--surface);
+    border:1px solid var(--hair);border-radius:10px;padding:10px 12px;margin-top:10px}
 
   /* 底部栏 */
   .bar{
@@ -215,11 +230,13 @@
       <button class="clip" id="attach" type="button" aria-label="添加附件" title="添加附件">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11.5l-8.2 8.2a5 5 0 01-7.1-7.1l8.5-8.5a3.4 3.4 0 014.8 4.8l-8.5 8.5a1.8 1.8 0 01-2.5-2.5l7.8-7.8"/></svg>
       </button>
+      <select id="ncat" class="catpick" aria-label="分类"></select>
       <input id="ntag" placeholder="贴个标签（可选）">
       <button class="submit" id="add">记下</button>
     </div>
   </div>
 
+  <div class="cat-row" id="cats"></div>
   <div class="tools">
     <label class="search">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
@@ -236,6 +253,7 @@
   <div class="sheet">
     <h3>编辑</h3>
     <textarea id="etxt"></textarea>
+    <select id="ecat" class="catpick" style="max-width:none;margin-top:10px;width:100%"></select>
     <input id="entag" placeholder="标签">
     <div class="row">
       <button id="ecancel">取消</button>
@@ -265,6 +283,34 @@
 </div>
 <input type="file" id="file" accept=".json,application/json" hidden>
 <input type="file" id="attFile" hidden multiple>
+
+<!-- 导出结果 -->
+<div class="mask" id="expMask">
+  <div class="sheet">
+    <h3>导出完成</h3>
+    <p class="confirm-msg">文件：<b id="expFile"></b></p>
+    <p class="exp-path" id="expPath"></p>
+    <div class="row">
+      <button id="expCopyPath">复制路径</button>
+      <button class="primary" id="expOpenDir">打开「下载」</button>
+    </div>
+    <div class="row">
+      <button id="expClose" style="flex:1">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新建分类 -->
+<div class="mask" id="catMask">
+  <div class="sheet">
+    <h3>新建分类</h3>
+    <input id="catName" placeholder="比如：工作 / 账目 / 证件" />
+    <div class="row">
+      <button id="catCancel">取消</button>
+      <button class="primary" id="catOk">创建</button>
+    </div>
+  </div>
+</div>
 
 <!-- 选附件方式 -->
 <div class="mask" id="attachMask">
@@ -310,6 +356,7 @@
   var KEY='memo.notes.v1';
   var notes=[], filterTag=null, onlyPin=false, editingId=null, tt;
   var pendingFiles=[];
+  var filterCat=null;
   var $=function(s){return document.querySelector(s)};
   var listEl=$('#list');
   var bridge = window.MemoBridge || null;   // Android 壳注入
@@ -332,6 +379,8 @@
     var q=$('#q').value.trim().toLowerCase();
     var show=notes.filter(function(n){
       if(onlyPin&&!n.pin) return false;
+      if(filterCat==='__none'){ if(n.cat) return false; }
+      else if(filterCat&&n.cat!==filterCat) return false;
       if(filterTag&&n.tag!==filterTag) return false;
       if(q){
         var hay=(n.txt+' '+(n.tag||'')).toLowerCase();
@@ -356,6 +405,10 @@
       var meta=document.createElement('div'); meta.className='meta';
       var time=document.createElement('span'); time.className='time'; time.textContent=fmt(n.ts);
       meta.appendChild(time);
+      if(n.cat){
+        var cc=document.createElement('span'); cc.className='cat-tag'; cc.textContent=n.cat;
+        meta.appendChild(cc);
+      }
       if(n.tag){
         var tg=document.createElement('span'); tg.className='ntag'; tg.textContent=n.tag;
         meta.appendChild(tg);
@@ -379,6 +432,7 @@
     });
 
     $('#count').textContent = notes.length ? notes.length+' 条' : '';
+    renderCats(); fillCatPickers();
     renderTags();
   }
 
@@ -430,6 +484,80 @@
   $('#confirmCancel').onclick=function(){ $('#confirmMask').classList.remove('show') };
   $('#confirmMask').addEventListener('click',function(e){ if(e.target===this) this.classList.remove('show') });
 
+  function catList(){
+    var seen={}, out=[];
+    notes.forEach(function(n){ if(n.cat&&!seen[n.cat]){ seen[n.cat]=1; out.push(n.cat) } });
+    return out.sort();
+  }
+  function renderCats(){
+    var row=$('#cats'); row.innerHTML='';
+    function chip(label,val,cls){
+      var b=document.createElement('button'); b.type='button';
+      b.className='cat'+(filterCat===val?' on':'')+(cls?' '+cls:'');
+      b.textContent=label;
+      b.onclick=function(){
+        if(val==='__new'){ openCatSheet(); return }
+        filterCat=(filterCat===val?null:val); render();
+      };
+      row.appendChild(b);
+    }
+    chip('全部', null, '');
+    chip('未分类', '__none', '');
+    catList().forEach(function(c){ chip(c, c, '') });
+    chip('＋ 新建', '__new', 'add');
+  }
+  function fillCatPickers(){
+    var list=catList();
+    ['#ncat','#ecat'].forEach(function(sel){
+      var el=$(sel); if(!el) return;
+      var keep=el.value;
+      el.innerHTML='';
+      var o0=document.createElement('option'); o0.value=''; o0.textContent='未分类';
+      el.appendChild(o0);
+      list.forEach(function(c){
+        var o=document.createElement('option'); o.value=c; o.textContent=c; el.appendChild(o);
+      });
+      if(keep&&list.indexOf(keep)>=0) el.value=keep;
+    });
+  }
+  function openCatSheet(){
+    $('#catName').value='';
+    $('#catMask').classList.add('show');
+    setTimeout(function(){ $('#catName').focus() },60);
+  }
+  $('#catCancel').onclick=function(){ $('#catMask').classList.remove('show') };
+  $('#catMask').addEventListener('click',function(e){ if(e.target===this) this.classList.remove('show') });
+  $('#catOk').onclick=function(){
+    var name=$('#catName').value.trim();
+    if(!name){ toast('起个名字'); return }
+    $('#catMask').classList.remove('show');
+    filterCat=name; $('#ncat').value=name;
+    renderCats(); fillCatPickers(); $('#ncat').value=name;
+    toast('已选择分类「'+name+'」，记下的内容会归到这里');
+  };
+
+  function ymd(){
+    var d=new Date(), p=function(x){return String(x).padStart(2,'0')};
+    return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+  }
+  function exportDone(fileName, path){
+    $('#expFile').textContent=fileName;
+    $('#expPath').textContent=path||'已保存到你选择的位置';
+    $('#expPath').dataset.path=path||'';
+    $('#expMask').classList.add('show');
+  }
+  $('#expClose').onclick=function(){ $('#expMask').classList.remove('show') };
+  $('#expMask').addEventListener('click',function(e){ if(e.target===this) this.classList.remove('show') });
+  $('#expCopyPath').onclick=function(){
+    var v=$('#expPath').dataset.path;
+    if(!v){ toast('去系统保存框里看位置'); return }
+    copyToClipboard(v);
+  };
+  $('#expOpenDir').onclick=function(){
+    if(bridge&&bridge.openDownloads&&bridge.openDownloads()) toast('已打开「下载」目录');
+    else toast('系统不允许直接打开，用文件管理器找「下载」');
+  };
+
   function renderTags(){
     var tally={}, order=[];
     notes.forEach(function(n){
@@ -452,8 +580,8 @@
     var v=$('#txt').value.trim();
     if(!v && !pendingFiles.length){ toast('写点什么，或加个附件'); return }
     notes.unshift({ id:Date.now()+''+Math.floor(Math.random()*1e4),
-      txt:v, tag:$('#ntag').value.trim(), ts:Date.now(), pin:false,
-      files:pendingFiles.slice() });
+      txt:v, tag:$('#ntag').value.trim(), cat:$('#ncat').value||'', ts:Date.now(),
+      pin:false, files:pendingFiles.slice() });
     $('#txt').value=''; $('#ntag').value=''; pendingFiles=[]; renderPending();
     $('#txt').focus();
     save(); render(); toast('已记下');
@@ -526,6 +654,7 @@
   function openEdit(id){
     var n=notes.filter(function(x){return x.id===id})[0]; if(!n) return;
     editingId=id; $('#etxt').value=n.txt; $('#entag').value=n.tag||'';
+    fillCatPickers(); $('#ecat').value=n.cat||'';
     $('#mask').classList.add('show'); setTimeout(function(){ $('#etxt').focus() },50);
   }
   $('#ecancel').onclick=function(){ $('#mask').classList.remove('show') };
@@ -533,7 +662,7 @@
     var n=notes.filter(function(x){return x.id===editingId})[0]; if(!n) return;
     var t=$('#etxt').value.trim();
     if(!t){ toast('内容不能为空'); return }
-    n.txt=t; n.tag=$('#entag').value.trim(); save();
+    n.txt=t; n.tag=$('#entag').value.trim(); n.cat=$('#ecat').value||''; save();
     $('#mask').classList.remove('show'); render(); toast('已保存');
   };
   $('#mask').addEventListener('click',function(e){ if(e.target===this) this.classList.remove('show') });
@@ -551,18 +680,14 @@
   function dump(){ return JSON.stringify(notes,null,2) }
 
   // ——— 导出 ———
-  function ymd(){
-    var d=new Date(), p=function(x){return String(x).padStart(2,'0')};
-    return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
-  }
   function exportAll(){
     var name='memo-'+ymd()+'.json';
     var data=dump();
     if(bridge&&bridge.saveFile){
       var path=bridge.saveFile(name,data);
-      if(path){ toast('已导出：'+path); return; }
+      if(path){ exportDone(name,path); return; }
       // 直写下载目录失败 → 交给系统保存框，由用户选位置
-      if(bridge.pickSave&&bridge.pickSave(name,data)){ toast('请选择保存位置'); return; }
+      if(bridge.pickSave&&bridge.pickSave(name,data)){ exportDone(name,''); return; }
       toast('导出失败，改用复制');
       copyToClipboard(data);
       return;

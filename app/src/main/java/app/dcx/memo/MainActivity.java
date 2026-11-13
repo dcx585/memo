@@ -347,6 +347,25 @@ public class MainActivity extends Activity {
             }
         }
 
+        /** 打开系统「下载」目录，方便用户看到导出的文件。 */
+        @JavascriptInterface
+        public boolean openDownloads() {
+            String[] candidates = {
+                "content://com.android.externalstorage.documents/root/primary",
+                "content://com.android.externalstorage.documents/document/primary%3ADownload"
+            };
+            for (String c : candidates) {
+                try {
+                    Intent i = new Intent(Intent.ACTION_VIEW);
+                    i.setData(Uri.parse(c));
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(i);
+                    return true;
+                } catch (Exception ignored) { }
+            }
+            return false;
+        }
+
         @JavascriptInterface
         public String appVersion() {
             try {
